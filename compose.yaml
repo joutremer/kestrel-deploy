@@ -1,0 +1,65 @@
+# kestrel-deploy: local infrastructure
+#
+# Start everything:   docker compose up -d
+# Check status:       docker compose ps
+# Full reset:         docker compose down -v   (wipes all data, then reseed)
+#
+# Values like ${WH_USER} are read automatically from .env in this folder.
+
+services:
+  # ---------- KESTREL'S ERP (pretend this is the customer's system) ----------
+  odoo-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+      POSTGRES_DB: postgres
+    volumes: [odoo-db-data:/var/lib/postgresql/data]
+    # no ports: on purpose; only Odoo can reach this database,
+    # so your code must go through the API like a real deployment
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo -d postgres"]
+      interval: 5s
+      retries: 10
+
+  odoo:
+    image: odoo:19
+    depends_on:
+      odoo-db:
+        condition: service_healthy
+    environment:
+      HOST: odoo-db
+      USER: odoo
+      PASSWORD: odoo
+    ports: ["8069:8069"]            # Odoo at http://localhost:8069
+    volumes: [odoo-data:/var/lib/odoo]
+
+  # ---------- YOUR SIDE (your product's infrastructure) ----------
+  warehouse:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${WH_USER}
+      POSTGRES_PASSWORD: ${WH_PASSWORD}
+      POSTGRES_DB: ${WH_DB}
+    ports: ["5433:5432"]            # your code connects to localhost:5433
+    volumes: [wh-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${WH_USER} -d ${WH_DB}"]
+      interval: 5s
+      retries: 10
+
+  hasura:
+    image: hasura/graphql-engine:latest   # pin the exact version once it's working
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL: postgres://${WH_USER}:${WH_PASSWORD}@warehouse:5432/${WH_DB}
+      HASURA_GRAPHQL_ENABLE_CONSOLE: "true"
+      HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_ADMIN_SECRET}
+    ports: ["8080:8080"]            # Hasura console at http://localhost:8080
+
+volumes:
+  odoo-db-data:
+  odoo-data:
+  wh-data:
